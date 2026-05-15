@@ -4,7 +4,7 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blue)](https://www.home-assistant.io/)
 
-Display your Home Assistant sensor data on a real **Commodore 64**(https://ultimate64.com/) using the REST API.
+Display your Home Assistant sensor data on a real [**Commodore 64**](https://ultimate64.com/) using the REST API.
 
 ![HomeTo64 Logo](custom_components/hometo64/brand/logo.png)
 

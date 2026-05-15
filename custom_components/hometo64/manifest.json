@@ -1,0 +1,18 @@
+{
+  "domain": "hometo64",
+  "name": "HomeTo64",
+  "version": "1.0.0",
+  "documentation": "https://github.com/JKnivesworthy/hometo64",
+  "issue_tracker": "https://github.com/JKnivesworthy/hometo64/issues",
+  "requirements": [],
+  "dependencies": [],
+  "codeowners": [
+    "@JKnivesworthy"
+  ],
+  "iot_class": "local_push",
+  "config_flow": true,
+  "platforms": [
+    "button"
+  ],
+  "license": "GPL-3.0"
+}

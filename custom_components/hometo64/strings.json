@@ -1,0 +1,170 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to C64 Ultimate",
+        "description": "Enter the network details for your Commodore 64 Ultimate cartridge.",
+        "data": {
+          "host": "IP Address",
+          "password": "Network Password"
+        },
+        "data_description": {
+          "host": "The local IP address of your Commodore 64 Ultimate (e.g. 192.168.1.50)",
+          "password": "Optional \u2014 only required if you have set a Web Password under Network Settings on the Ultimate"
+        }
+      },
+      "display": {
+        "title": "Display Settings",
+        "description": "Configure how the dashboard appears on the C64 screen.",
+        "data": {
+          "heading": "Dashboard Heading",
+          "filename": "PRG Filename",
+          "scan_interval": "Refresh Interval (seconds)",
+          "auto_stop_minutes": "Auto-Stop RAM Writes (minutes)"
+        },
+        "data_description": {
+          "heading": "Title shown in the top bar of the C64 dashboard (max 38 characters)",
+          "filename": "Filename written to the C64 SD card, e.g. HOMETO64.PRG",
+          "scan_interval": "How often (in seconds) the PRG is rebuilt from current sensor values",
+          "auto_stop_minutes": "Stop sending sensor data to the C64 after this many minutes. Set to 0 to never auto-stop. Use the 'Stop RAM Writes' button to stop immediately. Recommended: set this to a typical session length so that if you forget to stop manually, Home Assistant will not continue writing to C64 RAM indefinitely."
+        }
+      },
+      "sensors": {
+        "title": "Choose Sensors",
+        "description": "Select the Home Assistant entities you want to display on the C64. You can customise how each sensor is labelled on the next screen.",
+        "data": {
+          "sensors": "Sensors to display"
+        }
+      },
+      "names": {
+        "title": "Sensor Display Names",
+        "description": "These names appear on the C64 screen next to each sensor value. They have been pre-filled from each entity's friendly name \u2014 edit any you want to shorten or rename.",
+        "data": {}
+      },
+      "global": {
+        "title": "Display Settings",
+        "data": {
+          "scan_interval": "Refresh Interval (seconds)",
+          "auto_stop_minutes": "Auto-Stop RAM Writes (minutes)",
+          "num_pages": "Number of Pages (1-10)"
+        },
+        "data_description": {
+          "scan_interval": "How often to update sensor values on the C64 screen.",
+          "auto_stop_minutes": "Stop sending data after this many minutes. Set to 0 to never auto-stop.",
+          "num_pages": "How many separate sensor pages to configure. Navigate pages on the C64 with the left and right cursor keys."
+        }
+      },
+      "page_heading": {
+        "title": "Page {page_num} \u2014 Heading",
+        "data": {
+          "page_heading": "Page Heading"
+        },
+        "data_description": {
+          "page_heading": "Heading displayed at the top of this page on the C64 (max 37 chars)."
+        }
+      },
+      "page_sensors": {
+        "title": "Page {page_num} \u2014 Choose Sensors",
+        "data": {
+          "sensors": "Sensors (up to 10 per page)"
+        }
+      },
+      "page_names": {
+        "title": "Page {page_num} \u2014 Sensor Display Names",
+        "description": "Customise how each sensor name appears on the C64 screen (max 20 chars).",
+        "data": {}
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot reach the C64 Ultimate. Check the IP address and that firmware 3.11+ is installed.",
+      "invalid_auth": "Wrong Network Password. Check the password under Network Settings on your Ultimate.",
+      "unknown": "Unexpected error \u2014 check the Home Assistant logs."
+    },
+    "abort": {
+      "already_configured": "This C64 Ultimate is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Display Settings",
+        "description": "Update the heading and refresh settings.",
+        "data": {
+          "heading": "Dashboard Heading",
+          "filename": "PRG Filename",
+          "scan_interval": "Refresh Interval (seconds)"
+        },
+        "data_description": {
+          "heading": "Title shown in the top bar of the C64 dashboard (max 38 characters)",
+          "filename": "Filename written to the C64 SD card, e.g. HOMETO64.PRG",
+          "scan_interval": "How often (in seconds) the PRG is rebuilt from current sensor values"
+        }
+      },
+      "sensors": {
+        "title": "Choose Sensors",
+        "description": "Select the entities to display on the C64. Previously configured sensors are pre-selected.",
+        "data": {
+          "sensors": "Sensors to display"
+        }
+      },
+      "names": {
+        "title": "Sensor Display Names",
+        "description": "These names appear on the C64 screen. Edit any you want to shorten or rename. Changes take effect on the next Run.",
+        "data": {}
+      },
+      "global": {
+        "title": "Display Settings",
+        "data": {
+          "scan_interval": "Refresh Interval (seconds)",
+          "auto_stop_minutes": "Auto-Stop RAM Writes (minutes)",
+          "num_pages": "Number of Pages (1-10)"
+        },
+        "data_description": {
+          "scan_interval": "How often to update sensor values on the C64 screen.",
+          "auto_stop_minutes": "Stop sending data after this many minutes. Set to 0 to never auto-stop.",
+          "num_pages": "How many separate sensor pages to configure. Navigate pages on the C64 with the left and right cursor keys."
+        }
+      },
+      "page_heading": {
+        "title": "Page {page_num} \u2014 Heading",
+        "data": {
+          "page_heading": "Page Heading"
+        },
+        "data_description": {
+          "page_heading": "Heading displayed at the top of this page on the C64 (max 37 chars)."
+        }
+      },
+      "page_sensors": {
+        "title": "Page {page_num} \u2014 Choose Sensors",
+        "data": {
+          "sensors": "Sensors (up to 10 per page)"
+        }
+      },
+      "page_names": {
+        "title": "Page {page_num} \u2014 Sensor Display Names",
+        "description": "Customise how each sensor name appears on the C64 screen (max 20 chars).",
+        "data": {}
+      }
+    }
+  },
+  "services": {
+    "run_on_c64": {
+      "name": "Run on C64",
+      "description": "Reset the C64 and immediately run the current sensor dashboard PRG."
+    },
+    "download_prg": {
+      "name": "Download PRG",
+      "description": "Write the current PRG to the HA www folder and show a download link."
+    }
+  },
+  "entity": {
+    "button": {
+      "stop_ram_writes": {
+        "name": "Stop RAM Writes"
+      },
+      "next_page": {
+        "name": "Next Page"
+      }
+    }
+  }
+}

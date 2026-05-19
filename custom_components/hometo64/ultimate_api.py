@@ -171,3 +171,60 @@ def write_mem(
                 f"writemem failed at {chunk_addr:#06x}: HTTP {status}"
             )
         offset += chunk_size
+
+def read_mem(
+    host: str,
+    address: int,
+    length: int = 1,
+    password: str = "",
+    timeout: int = 5,
+) -> bytes:
+    """Read bytes from C64 RAM via DMA (GET /v1/machine:readmem).
+
+    Returns raw bytes. Used to poll the action request byte at $CFFC
+    which the C64 BASIC program writes when the user presses Return
+    on a controllable entity.
+    """
+    url = _base_url(host) + f"/machine:readmem?address={address:04X}&length={length}"
+    req = urllib.request.Request(url)
+    if password:
+        req.add_header("X-Password", password)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        raise UltimateAPIError(
+            f"readmem failed at {address:#06x}: HTTP {exc.code}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise UltimateAPIError(
+            f"readmem connection failed ({host}): {exc.reason}"
+        ) from exc
+
+
+def read_mem(
+    host: str,
+    address: int,
+    length: int = 1,
+    password: str = "",
+    timeout: int = 10,
+) -> bytes:
+    """Read bytes from C64 RAM via DMA (GET /v1/machine:readmem).
+
+    Returns raw bytes. address is 16-bit int. Default length=1.
+    """
+    url = _base_url(host) + f"/machine:readmem?address={address:04X}&length={length}"
+    req = urllib.request.Request(url, method="GET")
+    if password:
+        req.add_header("X-Password", password)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        raise UltimateAPIError(
+            f"readmem failed at {address:#06x}: HTTP {exc.code}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise UltimateAPIError(
+            f"readmem connection failed ({host}): {exc.reason}"
+        ) from exc

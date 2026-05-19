@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import logging
 
 from homeassistant.config_entries import ConfigEntry
@@ -22,13 +23,19 @@ from .const import (
 from .c64_prg import (
     build_sensor_prg, build_hello_world_prg, build_multipage_prg,
     NAV_ADDR, scratch_addr, VALUE_WIDTH, SENSORS_PER_PAGE,
+    ACTIVITY_ADDR,
 )
-from .ultimate_api import run_prg, write_mem, UltimateAPIError
+from .ultimate_api import run_prg, write_mem, read_mem, UltimateAPIError
+from .const import (
+    SCRATCH_ACTION_ADDR, SCRATCH_BITMASK_ADDR,
+    TOGGLEABLE_DOMAINS, OPTIMISTIC_TOGGLE,
+)
 from .const import (
     CONF_PASSWORD, DEFAULT_PASSWORD,
     CONF_AUTO_STOP_MIN, DEFAULT_AUTO_STOP_MIN,
     CONF_PAGES, CONF_PAGE_HEADING, CONF_NUM_PAGES,
     DEFAULT_HEADING,
+    CONF_AUTO_CYCLE, DEFAULT_AUTO_CYCLE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,6 +75,8 @@ class HomeTo64Coordinator:
         self._prg_running: bool = False   # True only after user presses "Run on C64"
         self._prg_started_at: float = 0.0  # monotonic time when PRG was last run
         self._current_page: int = 0         # tracked page index for Next Page button
+        self._prg_settled: bool = False     # True after settle delay post-run_prg
+        self._task_action: asyncio.Task | None = None
 
     def _cfg(self, key: str, default=None):
         return {**self.entry.data, **self.entry.options}.get(key, default)
@@ -166,11 +175,182 @@ class HomeTo64Coordinator:
         """Called by the Run button after a successful run_prg push.
         Enables the writemem refresh loop to start updating screen values.
         """
-        import time as _time
         self._prg_running = True
-        self._prg_started_at = _time.monotonic()
+        self._prg_settled = False   # will be set True after settle delay
+        self._prg_started_at = time.monotonic()
         self._current_page = 0
+        self._last_activity_val = 0
+        self._last_interaction = time.monotonic()
         _LOGGER.debug("HomeTo64: PRG is now running — writemem updates enabled")
+        async def _init_bitmask():
+            try:
+                h = self._cfg(CONF_HOST)
+                p = self._cfg(CONF_PASSWORD, DEFAULT_PASSWORD)
+                await self._write_bitmask(h, p, 0)
+            except Exception:
+                pass
+        self.hass.loop.create_task(_init_bitmask())
+
+    def _get_page_entities(self, page_index: int) -> list[dict]:
+        """Return raw entity config list for a specific page."""
+        pages_cfg = self._cfg(CONF_PAGES, None)
+        if pages_cfg and page_index < len(pages_cfg):
+            return pages_cfg[page_index].get(CONF_SENSORS, [])
+        if page_index == 0:
+            return self._cfg(CONF_SENSORS, [])
+        return []
+
+    def _controllable_bitmask(self, page_index: int) -> int:
+        """Return bitmask of which slots are toggleable (bit N = slot N).
+
+        Capped at 8 bits (slots 0-7) since the bitmap is a single byte.
+        Slots 8-9 are displayed but not cursor-selectable.
+        """
+        entities = self._get_page_entities(page_index)
+        mask = 0
+        for i, cfg in enumerate(entities[:8]):   # only bits 0-7 fit in a byte
+            eid = cfg.get(CONF_ENTITY_ID, "")
+            domain = eid.split(".")[0] if "." in eid else ""
+            if domain in TOGGLEABLE_DOMAINS:
+                mask |= (1 << i)
+        return mask & 0xFF   # guarantee single byte
+
+    async def _clear_page_values(self, host: str, password: str) -> None:
+        """Write spaces to all 10 sensor value columns on screen.
+
+        Called before writing new page values to prevent old page data
+        from showing while the refresh loop catches up.
+        """
+        blank = bytes([0x20] * 20)   # 20 spaces in screen codes
+        for i in range(10):
+            row  = 3 + i * 2
+            addr = 1024 + row * 40 + 20
+            await self.hass.async_add_executor_job(
+                write_mem, host, addr, blank, password
+            )
+
+    async def _write_bitmask(self, host: str, password: str, page_index: int) -> None:
+        """Write controllable bitmask for page to scratch RAM at $CFFD."""
+        mask = self._controllable_bitmask(page_index)
+        await self.hass.async_add_executor_job(
+            write_mem, host, SCRATCH_BITMASK_ADDR, bytes([mask]), password
+        )
+
+    async def _action_poll_loop(self) -> None:
+        """Poll $CFFC every 0.5s for C64 Return-key action requests.
+
+        BASIC POKEs slot+1 to $CFFC when user presses Return on a
+        controllable entity. We read it, call the HA service, write 0
+        back to acknowledge, and write the optimistic state to scratch RAM.
+        """
+        _LOGGER.debug("HomeTo64: action poll loop started")
+        while True:
+            try:
+                await asyncio.sleep(0.1)
+                if not self._prg_running:
+                    continue
+                host     = self._cfg(CONF_HOST)
+                password = self._cfg(CONF_PASSWORD, DEFAULT_PASSWORD)
+                data = await self.hass.async_add_executor_job(
+                    read_mem, host, SCRATCH_ACTION_ADDR, 1, password
+                )
+                if not data or data[0] == 0:
+                    # Detect cursor activity via TI value change at ACTIVITY_ADDR
+                    # BASIC POKEs current jiffies (TI) on each key press
+                    # HA resets screensaver timer whenever the value changes
+                    activity = await self.hass.async_add_executor_job(
+                        read_mem, host, ACTIVITY_ADDR, 1, password
+                    )
+                    if activity and activity[0] != self._last_activity_val:
+                        self._last_activity_val = activity[0]
+                        self._last_interaction = time.monotonic()
+                        _LOGGER.debug("HomeTo64: cursor activity — screensaver reset")
+                    # Check if page changed via keyboard navigation
+                    nav = await self.hass.async_add_executor_job(
+                        read_mem, host, NAV_ADDR, 1, password
+                    )
+                    if nav and nav[0] != self._current_page:
+                        self._current_page = nav[0]
+                        self._last_interaction = time.monotonic()  # reset screensaver
+                        # Clear bitmap immediately so stale page's bitmap
+                        # doesn't trigger cursor init on the new page
+                        await self.hass.async_add_executor_job(
+                            write_mem, host, SCRATCH_BITMASK_ADDR, bytes([0]), password
+                        )
+                        await self._clear_page_values(host, password)
+                        # Then write correct bitmap for new page
+                        await self._write_bitmask(host, password, self._current_page)
+                        _LOGGER.debug("HomeTo64: page changed to %d via keyboard",
+                                      self._current_page)
+                    continue
+
+                # Action byte: 1-10 = slot 0-9 (Return key = toggle)
+                raw_val = data[0]
+                if not (1 <= raw_val <= 10):
+                    continue
+                slot = raw_val - 1
+                self._last_interaction = time.monotonic()  # reset screensaver
+                forced_state = None
+                _LOGGER.info("HomeTo64: action slot=%d page=%d",
+                             slot, self._current_page)
+
+                # Clear action byte immediately
+                await self.hass.async_add_executor_job(
+                    write_mem, host, SCRATCH_ACTION_ADDR, bytes([0]), password
+                )
+
+                entities = self._get_page_entities(self._current_page)
+                if slot >= len(entities):
+                    continue
+                entity_id = entities[slot].get(CONF_ENTITY_ID, "")
+                domain    = entity_id.split(".")[0] if "." in entity_id else ""
+                if domain not in TOGGLEABLE_DOMAINS:
+                    continue
+
+                state = self.hass.states.get(entity_id)
+                if state is None:
+                    continue
+
+                # Optimistic display: flip current state
+                effective_state = state.state
+                opt = OPTIMISTIC_TOGGLE.get(effective_state, effective_state)
+                await self.hass.async_add_executor_job(
+                    write_mem, host,
+                    scratch_addr(self._current_page, slot),
+                    self._to_screen_bytes(opt, VALUE_WIDTH),
+                    password
+                )
+
+                await self._toggle_entity(domain, entity_id, state.state)
+
+            except UltimateAPIError as exc:
+                _LOGGER.debug("HomeTo64: action poll — offline: %s", exc)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.warning("HomeTo64: action poll error — %s", exc)
+
+    async def _toggle_entity(self, domain: str, entity_id: str, state: str) -> None:
+        """Call the appropriate HA service to toggle an entity."""
+        svc_domain = domain
+        if domain in ("light", "switch", "input_boolean", "fan", "automation"):
+            service = "turn_off" if state == "on" else "turn_on"
+        elif domain == "lock":
+            service = "unlock" if state == "locked" else "lock"
+        elif domain == "cover":
+            service = "close_cover" if state == "open" else "open_cover"
+        elif domain == "scene":
+            service = "turn_on"
+        elif domain == "group":
+            # Groups use homeassistant domain for turn_on/off
+            svc_domain = "homeassistant"
+            service = "turn_off" if state == "on" else "turn_on"
+        else:
+            return
+        await self.hass.services.async_call(
+            svc_domain, service, {"entity_id": entity_id}, blocking=False
+        )
+        _LOGGER.info("HomeTo64: %s.%s(%s)", svc_domain, service, entity_id)
 
     def build_prg(self) -> bytes:
         """Build the PRG from current sensor states."""
@@ -210,11 +390,21 @@ class HomeTo64Coordinator:
         self._task = self.hass.loop.create_task(
             self._refresh_loop(), name=f"hometo64_refresh_{self.entry.entry_id}"
         )
+        self._task_action = self.hass.loop.create_task(
+            self._action_poll_loop(), name=f"hometo64_action_{self.entry.entry_id}"
+        )
+        self._task_cycle = self.hass.loop.create_task(
+            self._auto_cycle_loop(), name=f"hometo64_cycle_{self.entry.entry_id}"
+        )
         _LOGGER.info("HomeTo64: coordinator started for %s", self._cfg(CONF_HOST))
 
     def stop(self) -> None:
         if self._task and not self._task.done():
             self._task.cancel()
+        if self._task_action:
+            self._task_action.cancel()
+        if hasattr(self, '_task_cycle') and self._task_cycle:
+            self._task_cycle.cancel()
         _LOGGER.info("HomeTo64: coordinator stopped")
 
     # C64 screen RAM constants
@@ -239,21 +429,81 @@ class HomeTo64Coordinator:
         padded = text.upper()[:width].ljust(width)
         return bytes(self._to_screen_code(ch) for ch in padded)
 
-    def _build_scratch_update(
-        self, pages: list[tuple[str, list[tuple[str, str]]]]
-    ) -> list[tuple[int, bytes]]:
-        """Build (address, data) pairs for the scratch RAM value table at $C000.
+    # Screen RAM layout for direct value write
+    _SCREEN_BASE     = 1024   # $0400
+    _SENSOR_ROW      = 3      # first sensor row (row 0=blank,1=heading,2=blank,3+)
+    _SENSOR_ROW_STEP = 2      # double-spaced rows
+    _VALUE_COL       = 20     # value starts at col 20
+    _VALUE_WIDTH     = 20     # 20 screen-code bytes per value
 
-        Each sensor value is 20 screen-code bytes at scratch_addr(page, sensor).
-        HA writes all pages — BASIC reads whichever page is active.
+    def _screen_value_addr(self, sensor_index: int) -> int:
+        """Screen RAM address of the value column for sensor N on the current page."""
+        row = self._SENSOR_ROW + sensor_index * self._SENSOR_ROW_STEP
+        return self._SCREEN_BASE + row * 40 + self._VALUE_COL
+
+    def _build_screen_update(
+        self, sensors: list[tuple[str, str]]
+    ) -> list[tuple[int, bytes]]:
+        """Build (address, data) pairs writing sensor values directly to screen RAM.
+
+        Writes all sensors (up to 10) — all get value updates.
+        Only slots 0-7 are cursor-selectable (bitmap byte limit).
+        Slots 8-9 display values but cannot be toggled via cursor.
         """
         writes: list[tuple[int, bytes]] = []
-        for page_idx, (_, sensors) in enumerate(pages):
-            for sensor_idx, (_, value) in enumerate(sensors[:SENSORS_PER_PAGE]):
-                addr = scratch_addr(page_idx, sensor_idx)
-                data = self._to_screen_bytes(value, VALUE_WIDTH)
-                writes.append((addr, data))
+        for i, (_, value) in enumerate(sensors[:SENSORS_PER_PAGE]):   # all 10
+            addr = self._screen_value_addr(i)
+            data = self._to_screen_bytes(value, self._VALUE_WIDTH)
+            writes.append((addr, data))
         return writes
+
+    async def _auto_cycle_loop(self) -> None:
+        """Advance to next page after ac_secs seconds of C64 keyboard inactivity.
+
+        Uses a timestamp to track last keyboard interaction (detected via readmem
+        in the action poll loop). Fires the same logic as the Next Page button.
+        """
+        _LOGGER.debug("HomeTo64: auto-cycle loop started")
+        if not hasattr(self, '_last_interaction'):
+            self._last_interaction = time.monotonic()
+        while True:
+            await asyncio.sleep(1)
+            if not self._prg_running or not self._prg_settled:
+                self._last_interaction = time.monotonic()  # reset while inactive
+                continue
+            ac_secs = int(self._cfg(CONF_AUTO_CYCLE, DEFAULT_AUTO_CYCLE))
+            if ac_secs <= 0:
+                self._last_interaction = time.monotonic()  # reset while disabled
+                continue
+            idle = time.monotonic() - self._last_interaction
+            _LOGGER.debug("HomeTo64: auto-cycle idle=%.1fs threshold=%ds", idle, ac_secs)
+            if idle < ac_secs:
+                continue
+            # Inactivity threshold reached — advance page
+            self._last_interaction = time.monotonic()
+            pages_cfg = self._cfg(CONF_PAGES, None)
+            n_pages   = len(pages_cfg) if pages_cfg else 1
+            if n_pages <= 1:
+                continue
+            host     = self._cfg(CONF_HOST)
+            password = self._cfg(CONF_PASSWORD, DEFAULT_PASSWORD)
+            next_page = (self._current_page + 1) % n_pages
+            self._current_page = next_page
+            try:
+                await self.hass.async_add_executor_job(
+                    write_mem, host, SCRATCH_BITMASK_ADDR, bytes([0]), password
+                )
+                await self._clear_page_values(host, password)
+                await self.hass.async_add_executor_job(
+                    write_mem, host, NAV_ADDR, bytes([next_page]), password
+                )
+                await self._write_bitmask(host, password, next_page)
+                _LOGGER.info(
+                    "HomeTo64: auto-cycle → page %d of %d (idle %.1fs)",
+                    next_page + 1, n_pages, idle
+                )
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.warning("HomeTo64: auto-cycle write failed — %s", exc)
 
     async def _refresh_loop(self) -> None:
         """Update sensor values in C64 screen RAM via DMA — no reset, no flash."""
@@ -266,11 +516,18 @@ class HomeTo64Coordinator:
                 if not self._prg_running:
                     _LOGGER.debug("HomeTo64: PRG not yet run — skipping writemem")
                     continue
+                if not self._prg_settled:
+                    # Give the PRG time to fully draw before first write.
+                    # Without this, HA writes to screen RAM while BASIC PRINT
+                    # is still drawing sensor rows, causing garbled display.
+                    _LOGGER.debug("HomeTo64: waiting for PRG to settle...")
+                    await asyncio.sleep(6)
+                    self._prg_settled = True
+                    _LOGGER.info("HomeTo64: PRG settled — starting screen RAM updates")
                 # Auto-stop check
-                import time as _time
                 auto_stop = int(self._cfg(CONF_AUTO_STOP_MIN, DEFAULT_AUTO_STOP_MIN))
                 if auto_stop > 0:
-                    elapsed_min = (_time.monotonic() - self._prg_started_at) / 60
+                    elapsed_min = (time.monotonic() - self._prg_started_at) / 60
                     if elapsed_min >= auto_stop:
                         self._prg_running = False
                         _LOGGER.info(
@@ -281,17 +538,32 @@ class HomeTo64Coordinator:
                         continue
                 host     = self._cfg(CONF_HOST)
                 password = self._cfg(CONF_PASSWORD, DEFAULT_PASSWORD)
-                pages   = self._get_pages()
-                writes  = self._build_scratch_update(pages)
-                n_total = sum(len(d) for _, d in writes)
-                for addr, data in writes:
-                    await self.hass.async_add_executor_job(
-                        write_mem, host, addr, data, password
+                pages    = self._get_pages()
+                # Read live page index from C64 on every tick to stay in sync
+                try:
+                    nav_raw = await self.hass.async_add_executor_job(
+                        read_mem, host, NAV_ADDR, 1, password
                     )
-                _LOGGER.info(
-                    "HomeTo64: wrote %d values (%d bytes) to scratch RAM",
-                    len(writes), n_total,
-                )
+                    if nav_raw and nav_raw[0] < len(pages) and nav_raw[0] != self._current_page:
+                        self._current_page = nav_raw[0]
+                        self._last_interaction = time.monotonic()
+                        _LOGGER.debug("HomeTo64: refresh loop synced to page %d", self._current_page)
+                except UltimateAPIError:
+                    pass
+                page_idx = self._current_page
+                if page_idx < len(pages):
+                    _, sensors = pages[page_idx]
+                    writes = self._build_screen_update(sensors)
+                    for addr, data in writes:
+                        await self.hass.async_add_executor_job(
+                            write_mem, host, addr, data, password
+                        )
+                    # Keep bitmask current for active page
+                    await self._write_bitmask(host, password, page_idx)
+                    _LOGGER.info(
+                        "HomeTo64: wrote %d sensor values direct to screen RAM (page %d)",
+                        len(writes), page_idx,
+                    )
             except UltimateAPIError as exc:
                 _LOGGER.warning("HomeTo64: writemem failed (C64 offline?) — %s", exc)
             except Exception as exc:  # noqa: BLE001

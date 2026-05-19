@@ -41,6 +41,7 @@ from .const import (
     DEFAULT_FILENAME,
     DEFAULT_PASSWORD,
     WWW_SUBDIR,
+    SCRATCH_BITMASK_ADDR,
 )
 from .ultimate_api import run_prg, write_mem, UltimateAPIError
 from .c64_prg import NAV_ADDR
@@ -311,9 +312,17 @@ class HomeTo64NextPageButton(ButtonEntity):
         coordinator._current_page = next_page
 
         try:
+            # Clear bitmap first so stale bits don't trigger cursor init
+            # on the new page before the correct bitmap arrives
+            await self.hass.async_add_executor_job(
+                write_mem, host, SCRATCH_BITMASK_ADDR, bytes([0]), password
+            )
+            await coordinator._clear_page_values(host, password)
             await self.hass.async_add_executor_job(
                 write_mem, host, NAV_ADDR, bytes([next_page]), password
             )
+            # Now write correct bitmap for new page
+            await coordinator._write_bitmask(host, password, next_page)
             _LOGGER.info(
                 "HomeTo64: Next Page → page %d of %d", next_page + 1, n_pages
             )

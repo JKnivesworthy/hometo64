@@ -65,3 +65,32 @@ CONF_PAGE_HEADING  = "page_heading"    # heading for a single page
 CONF_NUM_PAGES     = "num_pages"       # how many pages (1-3)
 DEFAULT_NUM_PAGES  = 1
 MAX_PAGES          = 10
+
+# Scratch RAM control addresses
+SCRATCH_ACTION_ADDR = 0xCFFC   # C64 writes slot+1 here; HA reads, calls service, writes 0
+SCRATCH_BITMASK_ADDR = 0xCFFD  # HA writes controllable bitmask for current page
+SCRATCH_CURSOR_ADDR  = 0xCFFE  # C64 tracks selected slot index here
+# NAV_ADDR = 0xCFFF (defined in c64_prg.py)
+
+# Entity domains that support toggle/control from the C64 dashboard
+TOGGLEABLE_DOMAINS = frozenset({
+    "light", "switch", "input_boolean", "fan",
+    "cover", "lock", "scene", "automation", "group",
+})
+
+# Optimistic display values shown immediately on toggle (before HA confirms)
+OPTIMISTIC_TOGGLE = {
+    "on":       "Off",
+    "off":      "On",
+    "open":     "Closing",
+    "closed":   "Opening",
+    "locked":   "Unlockd",
+    "unlocked": "Locked",
+    "active":   "Idle",
+    "idle":     "Active",
+}
+
+# Auto-cycle pages feature
+CONF_AUTO_CYCLE    = "auto_cycle_seconds"   # 0 = off
+DEFAULT_AUTO_CYCLE = 0                       # off by default
+AUTO_CYCLE_ADDR    = 53243                   # $CFCB — HA writes jiffy interval, BASIC reads

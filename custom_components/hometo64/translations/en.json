@@ -46,12 +46,16 @@
         "data": {
           "scan_interval": "Refresh Interval (seconds)",
           "auto_stop_minutes": "Auto-Stop RAM Writes (minutes)",
-          "num_pages": "Number of Pages (1-10)"
+          "num_pages": "Number of Pages",
+          "auto_cycle_seconds": "Screen Saver \u2014 Auto-Cycle Pages",
+          "auto_stop_min": "Auto-Stop Timeout (minutes)"
         },
         "data_description": {
-          "scan_interval": "How often to update sensor values on the C64 screen.",
+          "scan_interval": "How often (in seconds) Home Assistant should write updated sensor values directly to C64 RAM. Lower values update the display more frequently but increase network traffic to your Ultimate cartridge.",
           "auto_stop_minutes": "Stop sending data after this many minutes. Set to 0 to never auto-stop.",
-          "num_pages": "How many separate sensor pages to configure. Navigate pages on the C64 with the left and right cursor keys."
+          "num_pages": "How many pages of sensors would you like? Each page can display up to 10 sensors with a custom heading.",
+          "auto_cycle_seconds": "Recommended minimum: 20 seconds. 0=off",
+          "auto_stop_min": "Time in minutes before HA automatically stops sending sensor data to the C64. Useful if you leave the C64 on and walk away. Set to 0 to never auto-stop."
         }
       },
       "page_heading": {
@@ -92,12 +96,18 @@
         "data": {
           "heading": "Dashboard Heading",
           "filename": "PRG Filename",
-          "scan_interval": "Refresh Interval (seconds)"
+          "scan_interval": "Refresh Interval (seconds)",
+          "auto_cycle_seconds": "Screen Saver \u2014 Auto-Cycle Pages",
+          "auto_stop_min": "Auto-Stop Timeout (minutes)",
+          "num_pages": "Number of Pages"
         },
         "data_description": {
           "heading": "Title shown in the top bar of the C64 dashboard (max 38 characters)",
           "filename": "Filename written to the C64 SD card, e.g. HOMETO64.PRG",
-          "scan_interval": "How often (in seconds) the PRG is rebuilt from current sensor values"
+          "scan_interval": "How often (in seconds) Home Assistant should write updated sensor values directly to C64 RAM. Lower values update the display more frequently but increase network traffic to your Ultimate cartridge.",
+          "auto_cycle_seconds": "Recommended minimum: 20 seconds. 0=off",
+          "auto_stop_min": "Time in minutes before HA automatically stops sending sensor data to the C64. Useful if you leave the C64 on and walk away. Set to 0 to never auto-stop.",
+          "num_pages": "How many pages of sensors would you like? Each page can display up to 10 sensors with a custom heading."
         }
       },
       "sensors": {
@@ -117,12 +127,16 @@
         "data": {
           "scan_interval": "Refresh Interval (seconds)",
           "auto_stop_minutes": "Auto-Stop RAM Writes (minutes)",
-          "num_pages": "Number of Pages (1-10)"
+          "num_pages": "Number of Pages",
+          "auto_cycle_seconds": "Screen Saver \u2014 Auto-Cycle Pages",
+          "auto_stop_min": "Auto-Stop Timeout (minutes)"
         },
         "data_description": {
-          "scan_interval": "How often to update sensor values on the C64 screen.",
+          "scan_interval": "How often (in seconds) Home Assistant should write updated sensor values directly to C64 RAM. Lower values update the display more frequently but increase network traffic to your Ultimate cartridge.",
           "auto_stop_minutes": "Stop sending data after this many minutes. Set to 0 to never auto-stop.",
-          "num_pages": "How many separate sensor pages to configure. Navigate pages on the C64 with the left and right cursor keys."
+          "num_pages": "How many pages of sensors would you like? Each page can display up to 10 sensors with a custom heading.",
+          "auto_cycle_seconds": "Recommended minimum: 20 seconds. 0=off",
+          "auto_stop_min": "Time in minutes before HA automatically stops sending sensor data to the C64. Useful if you leave the C64 on and walk away. Set to 0 to never auto-stop."
         }
       },
       "page_heading": {

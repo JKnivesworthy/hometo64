@@ -47,6 +47,7 @@ from .const import (
     CONF_HEADING,
     CONF_SCAN_INTERVAL,
     CONF_AUTO_STOP_MIN,
+    CONF_AUTO_CYCLE,
     CONF_SENSORS,
     CONF_ENTITY_ID,
     CONF_DISPLAY_NAME,
@@ -57,6 +58,7 @@ from .const import (
     DEFAULT_HEADING,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_AUTO_STOP_MIN,
+    DEFAULT_AUTO_CYCLE,
     DEFAULT_SENSORS,
     DEFAULT_NUM_PAGES,
     MAX_PAGES,
@@ -151,6 +153,12 @@ def _global_settings_schema(defaults: dict | None = None) -> vol.Schema:
             default=d.get(CONF_AUTO_STOP_MIN, DEFAULT_AUTO_STOP_MIN),
         ): selector.NumberSelector(
             selector.NumberSelectorConfig(min=0, max=1440, mode=selector.NumberSelectorMode.BOX)
+        ),
+        vol.Optional(
+            CONF_AUTO_CYCLE,
+            default=d.get(CONF_AUTO_CYCLE, DEFAULT_AUTO_CYCLE),
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=0, max=300, mode=selector.NumberSelectorMode.BOX)
         ),
         vol.Optional(
             CONF_NUM_PAGES,
@@ -353,6 +361,7 @@ class HomeTo64OptionsFlow(config_entries.OptionsFlow):
             data_schema=_global_settings_schema({
                 CONF_SCAN_INTERVAL: self._current(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
                 CONF_AUTO_STOP_MIN: self._current(CONF_AUTO_STOP_MIN, DEFAULT_AUTO_STOP_MIN),
+                CONF_AUTO_CYCLE:    self._current(CONF_AUTO_CYCLE,    DEFAULT_AUTO_CYCLE),
                 CONF_NUM_PAGES:     current_num,
             }),
         )

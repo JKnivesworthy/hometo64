@@ -81,6 +81,10 @@ from .const import (
 # Scratch RAM layout
 # ---------------------------------------------------------------------------
 NAV_ADDR        = 53247   # $CFFF — HA writes page index here to nav from UI
+AUTO_CYCLE_ADDR = 53243   # $CFCB — HA writes jiffy interval (0=off) for auto-cycle
+ACTIVITY_ADDR   = 53246   # $CFCE — C64 writes 1 on any key press; HA reads+clears+resets timer
+ACTION_ADDR     = 53244   # $CFFC — C64 writes slot+1 here on Return press
+BITMASK_ADDR    = 53245   # $CFFD — HA writes controllable bitmask for current page
 SCRATCH_BASE    = 0xC000  # $C000 — sensor value table base
 SENSORS_PER_PAGE = 10     # max sensors per page
 VALUE_WIDTH     = 20      # screen codes per value
@@ -253,8 +257,12 @@ def _page_subroutine(
 
     ln = base + 40
     for i, (name, _) in enumerate(sensors[:SENSORS_PER_PAGE]):
-        name_str = _truncate(name, 20).ljust(20)
-        row      = name_str + " " * 19   # 39 chars — no wrap
+        # Cols 0-18: sensor name (19 chars, no indent)
+        # Col 19:    cursor/bullet area (space normally; ▶ POKEd here when selected)
+        # Cols 20-38: value area (written by writemem, 19 chars)
+        # Total: 19 + 1 + 19 = 39 chars — avoids double-newline
+        name_str = _truncate(name, 19).ljust(19) + " "  # 19 name + 1 cursor space
+        row      = name_str + " " * 19   # 20 + 19 = 39 chars total
         color    = PETSCII_BONE_WHITE if i % 2 == 0 else PETSCII_LIGHT_BLUE
         lines.append(_print_colored(ln, color, row))
         ln += 10
@@ -307,26 +315,7 @@ def _page_subroutine(
         lines.append(BasicLine(footer_ln, payload))
         footer_ln += 10
 
-    # POKE values from scratch RAM into screen RAM
-    poke_base = footer_ln
-    scratch_page_base = SCRATCH_BASE + page_index * SENSORS_PER_PAGE * VALUE_WIDTH
-    SENSOR_START_ROW = 3
-
-    for i in range(n_sensors):
-        screen_val_addr  = SCREEN_BASE + (SENSOR_START_ROW + i * 2) * C64_COLS + 20
-        scratch_val_addr = scratch_page_base + i * VALUE_WIDTH
-        payload = (
-            bytes([C64_TOKEN_FOR]) + _petscii("J") + bytes([0xB2]) +
-            _petscii("0") + bytes([C64_TOKEN_TO]) + _petscii("19") + b":" +
-            bytes([C64_TOKEN_POKE]) + _petscii(f"{screen_val_addr}") +
-            bytes([0xAA]) + _petscii("J,") +
-            bytes([C64_TOKEN_PEEK]) + b"(" + _petscii(f"{scratch_val_addr}") +
-            bytes([0xAA]) + _petscii("J)") + b":" +
-            bytes([C64_TOKEN_NEXT]) + _petscii("J")
-        )
-        lines.append(BasicLine(poke_base + i * 10, payload))
-
-    ret_ln = poke_base + n_sensors * 10
+    ret_ln = footer_ln
     lines.append(_return(ret_ln))
     return lines
 
@@ -372,6 +361,214 @@ def _value_subroutine(
     return lines
 
 
+def _cursor_subroutines() -> list[BasicLine]:
+    """Cursor navigation and toggle subroutines.
+
+    9000: Cursor DOWN — advance CS to next controllable slot, draw ▶
+    9100: Cursor UP   — retreat CS to prev controllable slot, draw ▶
+    9200: Return      — POKE CS+1 to ACTION_ADDR (HA reads and toggles)
+
+    CS = current cursor slot (0-9)
+    BM = PEEK(BITMASK_ADDR) — bitmask of controllable slots on current page
+    ▶  = PETSCII 0x1E (screen code 30, right-pointing triangle)
+    Screen address of col 0 of sensor row I = 1024 + (3 + I*2) * 40
+    """
+    CURSOR_CHAR = 81    # ● filled circle (toggle indicator)
+    SPACE       = 32    # space to erase
+    # 1024 + (3+CS*2)*40 = 1024 + 120 + CS*80 = 1144 + CS*80
+    # But BASIC can't easily do CS*80 — use CS+CS (=CS*2) for row, then *40
+    # Expression: 1024+(3+CS+CS)*40  which BASIC handles fine
+
+    def b(t): return _petscii(t)
+
+    lines: list[BasicLine] = [
+        # ── 21000: Cursor DOWN ────────────────────────────────────────────
+        # Initialize CS to first controllable slot if not yet set (CS=255 sentinel)
+        # Then advance to next controllable slot, wrapping at 9.
+        # Bounds check: IF CS>9 THEN CS=0 before any POKE
+        _rem(21000, "CSR DOWN"),
+        # Cache bitmap value
+        BasicLine(21001, b("BM") + bytes([0xB2]) +
+            bytes([C64_TOKEN_PEEK]) + b(f"({BITMASK_ADDR})")),
+        # Safety: clamp CS to 0-9 before erasing
+        BasicLine(21005,
+            bytes([C64_TOKEN_IF]) + b("CS") + bytes([0xB1]) + b("9") +
+            bytes([C64_TOKEN_THEN]) + b("CS") + bytes([0xB2]) + b("0")
+        ),
+        BasicLine(21006,
+            bytes([C64_TOKEN_IF]) + b("CS") + bytes([0xB3]) + b("0") +
+            bytes([C64_TOKEN_THEN]) + b("CS") + bytes([0xB2]) + b("0")
+        ),
+        # Erase old cursor (now safe — CS is 0-9)
+        BasicLine(21010,
+            bytes([C64_TOKEN_POKE]) + _petscii("1163") + bytes([0xAA]) + _petscii("CS") + bytes([0xAC]) + _petscii("80,32")
+        ),
+        # CS=CS+1: IF CS>9 THEN CS=0
+        BasicLine(21020, b("CS") + bytes([0xB2]) + b("CS") + bytes([0xAA]) + b("1")),
+        BasicLine(21030,
+            bytes([C64_TOKEN_IF]) + b("CS") + bytes([0xB1]) + b("9") +
+            bytes([C64_TOKEN_THEN]) + b("CS") + bytes([0xB2]) + b("0")
+        ),
+        # IF bit CS of bitmask is 0 → not controllable, keep advancing
+        BasicLine(21040,
+            bytes([C64_TOKEN_IF]) +
+            b("(BM") + bytes([0xAF]) + b("2") + bytes([0xAE]) + b("CS)") + bytes([0xB2]) + b("0") +
+            bytes([C64_TOKEN_THEN]) + bytes([C64_TOKEN_GOTO]) + b("21020")
+        ),
+        # Draw cursor at new valid slot
+        BasicLine(21050,
+            bytes([C64_TOKEN_POKE]) + _petscii("1163") + bytes([0xAA]) + _petscii("CS") + bytes([0xAC]) + _petscii("80,81")
+        ),
+        _return(21060),
+
+        # ── 21100: Cursor UP ──────────────────────────────────────────────
+        _rem(21100, "CSR UP"),
+        BasicLine(21101, b("BM") + bytes([0xB2]) +
+            bytes([C64_TOKEN_PEEK]) + b(f"({BITMASK_ADDR})")),
+        # Safety: clamp CS before erasing
+        BasicLine(21105,
+            bytes([C64_TOKEN_IF]) + b("CS") + bytes([0xB1]) + b("9") +
+            bytes([C64_TOKEN_THEN]) + b("CS") + bytes([0xB2]) + b("0")
+        ),
+        BasicLine(21106,
+            bytes([C64_TOKEN_IF]) + b("CS") + bytes([0xB3]) + b("0") +
+            bytes([C64_TOKEN_THEN]) + b("CS") + bytes([0xB2]) + b("0")
+        ),
+        BasicLine(21110,
+            bytes([C64_TOKEN_POKE]) + _petscii("1163") + bytes([0xAA]) + _petscii("CS") + bytes([0xAC]) + _petscii("80,32")
+        ),
+        BasicLine(21120, b("CS") + bytes([0xB2]) + b("CS") + bytes([0xAB]) + b("1")),
+        BasicLine(21130,
+            bytes([C64_TOKEN_IF]) + b("CS") + bytes([0xB3]) + b("0") +
+            bytes([C64_TOKEN_THEN]) + b("CS") + bytes([0xB2]) + b("9")
+        ),
+        BasicLine(21140,
+            bytes([C64_TOKEN_IF]) +
+            b("(BM") + bytes([0xAF]) + b("2") + bytes([0xAE]) + b("CS)") + bytes([0xB2]) + b("0") +
+            bytes([C64_TOKEN_THEN]) + bytes([C64_TOKEN_GOTO]) + b("21120")
+        ),
+        BasicLine(21150,
+            bytes([C64_TOKEN_POKE]) + _petscii("1163") + bytes([0xAA]) + _petscii("CS") + bytes([0xAC]) + _petscii("80,81")
+        ),
+        _return(21160),
+
+        # ── 21200: Toggle (Return) — POKE CS+1 (range 1-10)
+        _rem(21200, "TOGGLE"),
+        BasicLine(21205,
+            bytes([C64_TOKEN_IF]) + b("CS") + bytes([0xB1]) + b("9") +
+            bytes([C64_TOKEN_THEN]) + b("CS") + bytes([0xB2]) + b("0")
+        ),
+        BasicLine(21210,
+            bytes([C64_TOKEN_POKE]) + b(f"{ACTION_ADDR},CS") +
+            bytes([0xAA]) + b("1")
+        ),
+        _return(21220),
+
+        # ── 21300: Init cursor to first controllable slot ─────────────────
+        # Explicit bit checks — no loop, no 2^CS, no overflow, no infinite loop.
+        # BM = cached bitmap. Checks bits 0-7 in order, draws cursor at first.
+        _rem(21300, "CSR INIT"),
+        BasicLine(21305, b("BM") + bytes([0xB2]) +
+            bytes([C64_TOKEN_PEEK]) + b(f"({BITMASK_ADDR})")),
+        BasicLine(21310,
+            bytes([C64_TOKEN_IF]) + b("BM") + bytes([0xAF]) + b("1") +
+            bytes([C64_TOKEN_THEN]) + b("CS") + bytes([0xB2]) + b("0:") +
+            bytes([C64_TOKEN_GOTO]) + b("21390")),
+        BasicLine(21315,
+            bytes([C64_TOKEN_IF]) + b("BM") + bytes([0xAF]) + b("2") +
+            bytes([C64_TOKEN_THEN]) + b("CS") + bytes([0xB2]) + b("1:") +
+            bytes([C64_TOKEN_GOTO]) + b("21390")),
+        BasicLine(21320,
+            bytes([C64_TOKEN_IF]) + b("BM") + bytes([0xAF]) + b("4") +
+            bytes([C64_TOKEN_THEN]) + b("CS") + bytes([0xB2]) + b("2:") +
+            bytes([C64_TOKEN_GOTO]) + b("21390")),
+        BasicLine(21325,
+            bytes([C64_TOKEN_IF]) + b("BM") + bytes([0xAF]) + b("8") +
+            bytes([C64_TOKEN_THEN]) + b("CS") + bytes([0xB2]) + b("3:") +
+            bytes([C64_TOKEN_GOTO]) + b("21390")),
+        BasicLine(21330,
+            bytes([C64_TOKEN_IF]) + b("BM") + bytes([0xAF]) + b("16") +
+            bytes([C64_TOKEN_THEN]) + b("CS") + bytes([0xB2]) + b("4:") +
+            bytes([C64_TOKEN_GOTO]) + b("21390")),
+        BasicLine(21335,
+            bytes([C64_TOKEN_IF]) + b("BM") + bytes([0xAF]) + b("32") +
+            bytes([C64_TOKEN_THEN]) + b("CS") + bytes([0xB2]) + b("5:") +
+            bytes([C64_TOKEN_GOTO]) + b("21390")),
+        BasicLine(21340,
+            bytes([C64_TOKEN_IF]) + b("BM") + bytes([0xAF]) + b("64") +
+            bytes([C64_TOKEN_THEN]) + b("CS") + bytes([0xB2]) + b("6:") +
+            bytes([C64_TOKEN_GOTO]) + b("21390")),
+        BasicLine(21345,
+            bytes([C64_TOKEN_IF]) + b("BM") + bytes([0xAF]) + b("128") +
+            bytes([C64_TOKEN_THEN]) + b("CS") + bytes([0xB2]) + b("7:") +
+            bytes([C64_TOKEN_GOTO]) + b("21390")),
+        _return(21350),   # no controllable slot found
+        BasicLine(21390,
+            bytes([C64_TOKEN_POKE]) + _petscii("1163") + bytes([0xAA]) + _petscii("CS") + bytes([0xAC]) + _petscii("80,81")),
+        _return(21395),
+    ]
+    return lines
+
+
+def _build_splash() -> list[BasicLine]:
+    """One-screen splash: header + house + HOME (5 rows) + TO 64 (5 rows).
+    Fits in 24 PRINT rows. Row 24 = footer via POKE. Hold 5 seconds.
+    Colors: BONE_WHITE + LIGHT_BLUE only.
+    """
+    def b(text): return _petscii(text)
+    def _c(text, width=39): return text.center(width)[:39]
+
+    BONE_WHITE = 0x9B
+    LIGHT_BLUE = 0x9A
+    lines: list[BasicLine] = [
+        _rem(30000, "HOMETO64 SPLASH"),
+        _clr(30010),
+        _poke(30020, 53280, 0),
+        _poke(30030, 53281, 0),
+        # Rows 1-12: house from ASCII art (starts immediately after CLR)
+        _print_colored(30040, BONE_WHITE, _c('********************************')),
+        _print_colored(30050, BONE_WHITE, _c('*             **               *')),
+        _print_colored(30060, BONE_WHITE, _c('*          ********            *')),
+        _print_colored(30070, BONE_WHITE, _c('*        *************         *')),
+        _print_colored(30080, LIGHT_BLUE, _c('*      *****************       *')),
+        _print_colored(30090, LIGHT_BLUE, _c('*    ********************      *')),
+        _print_colored(30100, LIGHT_BLUE, _c('*   ***********************    *')),
+        _print_colored(30110, LIGHT_BLUE, _c('*  *************************   *')),
+        _print_colored(30120, BONE_WHITE, _c('*     *******************      *')),
+        _print_colored(30130, BONE_WHITE, _c('*     *******************      *')),
+        _print_colored(30140, BONE_WHITE, _c('***** ******************* ******')),
+        # Row 14: blank separator
+        _print(30160),
+        # Rows 15-19: HOME in big block letters (bone white)
+        _print_colored(30170, BONE_WHITE, _c('*   * ***** *   * *****')),
+        _print_colored(30180, BONE_WHITE, _c('*   * *   * ** ** *    ')),
+        _print_colored(30190, BONE_WHITE, _c('***** *   * * * * ***  ')),
+        _print_colored(30200, BONE_WHITE, _c('*   * *   * *   * *    ')),
+        _print_colored(30210, BONE_WHITE, _c('*   * ***** *   * *****')),
+        # Blank between HOME and TO 64
+        _print(30220),
+        # TO 64 in big block letters (light blue)
+        _print_colored(30230, LIGHT_BLUE, _c('***** *****      ***  *   *')),
+        _print_colored(30240, LIGHT_BLUE, _c('  *   *   *     *     *   *')),
+        _print_colored(30250, LIGHT_BLUE, _c('  *   *   *     ****  *****')),
+        _print_colored(30260, LIGHT_BLUE, _c('  *   *   *     *   *     *')),
+        _print_colored(30270, LIGHT_BLUE, _c('  *   *****      ***      *')),
+    ]
+
+    # 5 second hold (300 jiffies) — no footer during splash
+    ln = 30300
+    lines.append(BasicLine(ln, b("T")+bytes([0xB2])+b("TI"))); ln += 1
+    spin = ln
+    lines.append(BasicLine(spin,
+        bytes([C64_TOKEN_IF])+b("TI")+bytes([0xAB])+b("T")+
+        bytes([0xB3])+b("300")+
+        bytes([C64_TOKEN_THEN])+bytes([C64_TOKEN_GOTO])+_petscii(str(spin))
+    ))
+    ln += 1
+    lines.append(_return(ln))
+    return lines
+
+
 def build_multipage_prg(pages: list[tuple[str, list[tuple[str, str]]]]) -> bytes:
     """Build a multi-page sensor dashboard PRG.
 
@@ -405,8 +602,6 @@ def build_multipage_prg(pages: list[tuple[str, list[tuple[str, str]]]]) -> bytes
 
     # Targets for ON..GOSUB
     draw_targets  = ",".join(str(1000 + i * 1000) for i in range(n_pages))
-    val_targets   = ",".join(str(11000 + i * 1000) for i in range(n_pages))
-
     # ── Control section ──────────────────────────────────────────────────
     def b(text): return _petscii(text)
 
@@ -414,13 +609,17 @@ def build_multipage_prg(pages: list[tuple[str, list[tuple[str, str]]]]) -> bytes
         _rem(10, "HOMETO64"),
         _poke(20, 53280, 0),
         _poke(25, 53281, 0),
-        # P=0:N=<pages>:NP=0:POKE NAV_ADDR,0:T0=TI
+        # P=0:N=<pages>:NP=0:CS=0:POKE NAV_ADDR,0:POKE BITMASK_ADDR,0:T0=TI
         BasicLine(30,
-            b("P") + bytes([0xB2, 0x30, 0x3A]) +        # P=0:
-            b("N") + bytes([0xB2]) + b(str(n_pages)) + bytes([0x3A]) +  # N=n:
-            b("NP") + bytes([0xB2, 0x30, 0x3A]) +       # NP=0:
-            bytes([C64_TOKEN_POKE]) + b(f"{NAV_ADDR},0") + bytes([0x3A]) +  # POKE NAV,0:
-            b("T0") + bytes([0xB2]) + b("TI")            # T0=TI
+            b("P") + bytes([0xB2, 0x30, 0x3A]) +
+            b("N") + bytes([0xB2]) + b(str(n_pages)) + bytes([0x3A]) +
+            b("NP") + bytes([0xB2, 0x30, 0x3A]) +
+            b("CS") + bytes([0xB2, 0x30, 0x3A]) +
+            bytes([C64_TOKEN_POKE]) + b(f"{NAV_ADDR},0") + bytes([0x3A]) +
+            bytes([C64_TOKEN_POKE]) + b(f"{BITMASK_ADDR},0") + bytes([0x3A]) +
+            b("T0") + bytes([0xB2]) + b("TI") + bytes([0x3A]) +
+            b("TA") + bytes([0xB2]) + b("TI") + bytes([0x3A]) +
+            b("CX") + bytes([0xB2]) + b("0")   # CX = cursor drawn flag
         ),
         # ON P+1 GOSUB draw_targets
         BasicLine(40,
@@ -439,13 +638,20 @@ def build_multipage_prg(pages: list[tuple[str, list[tuple[str, str]]]]) -> bytes
             b("P") + bytes([0xB1]) + b("N") + bytes([0xAB]) + b("1") +
             bytes([C64_TOKEN_THEN]) + b("P") + bytes([0xB2]) + b("0")
         ),
-        # IF K$=CHR$(29) THEN NP=P:POKE NAV_ADDR,P:GOTO 40
+        # IF K$=CHR$(29) THEN NP=P:POKE NAV_ADDR,P:POKE BITMASK_ADDR,0:GOTO 40
+        # C64 clears bitmap itself so stale bits don't trigger cursor init on new page
         BasicLine(64,
             bytes([C64_TOKEN_IF]) +
             b("K$") + bytes([0xB2, 0xC7]) + b("(29)") +
             bytes([C64_TOKEN_THEN]) +
             b("NP") + bytes([0xB2]) + b("P") + bytes([0x3A]) +
             bytes([C64_TOKEN_POKE]) + b(f"{NAV_ADDR},") + b("P") + bytes([0x3A]) +
+            bytes([C64_TOKEN_POKE]) + b(f"{BITMASK_ADDR},0") + bytes([0x3A]) +
+            b("TA") + bytes([0xB2]) + b("TI") + bytes([0x3A]) +
+            bytes([C64_TOKEN_POKE]) + b(f"{ACTIVITY_ADDR},(") +
+            bytes([C64_TOKEN_PEEK]) + b(f"({ACTIVITY_ADDR})") +
+            bytes([0xAA]) + b("1)") + bytes([0xAF]) + b("1") + bytes([0x3A]) +
+            b("CX") + bytes([0xB2]) + b("0") + bytes([0x3A]) +
             bytes([C64_TOKEN_GOTO]) + b("40")
         ),
         # IF K$=CHR$(157) THEN P=P-1:IF P<0 THEN P=N-1  (left)
@@ -458,16 +664,22 @@ def build_multipage_prg(pages: list[tuple[str, list[tuple[str, str]]]]) -> bytes
             b("P") + bytes([0xB3]) + b("0") +
             bytes([C64_TOKEN_THEN]) + b("P") + bytes([0xB2]) + b("N") + bytes([0xAB]) + b("1")
         ),
-        # IF K$=CHR$(157) THEN NP=P:POKE NAV_ADDR,P:GOTO 40
+        # IF K$=CHR$(157) THEN NP=P:POKE NAV_ADDR,P:POKE BITMASK_ADDR,0:GOTO 40
         BasicLine(74,
             bytes([C64_TOKEN_IF]) +
             b("K$") + bytes([0xB2, 0xC7]) + b("(157)") +
             bytes([C64_TOKEN_THEN]) +
             b("NP") + bytes([0xB2]) + b("P") + bytes([0x3A]) +
             bytes([C64_TOKEN_POKE]) + b(f"{NAV_ADDR},") + b("P") + bytes([0x3A]) +
+            bytes([C64_TOKEN_POKE]) + b(f"{BITMASK_ADDR},0") + bytes([0x3A]) +
+            b("TA") + bytes([0xB2]) + b("TI") + bytes([0x3A]) +
+            bytes([C64_TOKEN_POKE]) + b(f"{ACTIVITY_ADDR},(") +
+            bytes([C64_TOKEN_PEEK]) + b(f"({ACTIVITY_ADDR})") +
+            bytes([0xAA]) + b("1)") + bytes([0xAF]) + b("1") + bytes([0x3A]) +
+            b("CX") + bytes([0xB2]) + b("0") + bytes([0x3A]) +
             bytes([C64_TOKEN_GOTO]) + b("40")
         ),
-        # IF PEEK(NAV)<NP THEN NP=PEEK(NAV):P=NP:GOTO 40
+        # IF PEEK(NAV)<NP THEN NP=PEEK(NAV):P=NP:POKE BITMASK_ADDR,0:GOTO 40
         BasicLine(75,
             bytes([C64_TOKEN_IF]) +
             bytes([C64_TOKEN_PEEK]) + b(f"({NAV_ADDR})") +
@@ -475,9 +687,10 @@ def build_multipage_prg(pages: list[tuple[str, list[tuple[str, str]]]]) -> bytes
             bytes([C64_TOKEN_THEN]) +
             b("NP") + bytes([0xB2]) + bytes([C64_TOKEN_PEEK]) + b(f"({NAV_ADDR})") +
             bytes([0x3A]) + b("P") + bytes([0xB2]) + b("NP") +
+            bytes([0x3A]) + bytes([C64_TOKEN_POKE]) + b(f"{BITMASK_ADDR},0") +
             bytes([0x3A]) + bytes([C64_TOKEN_GOTO]) + b("40")
         ),
-        # IF PEEK(NAV)>NP THEN NP=PEEK(NAV):P=NP:GOTO 40
+        # IF PEEK(NAV)>NP THEN NP=PEEK(NAV):P=NP:POKE BITMASK_ADDR,0:GOTO 40
         BasicLine(76,
             bytes([C64_TOKEN_IF]) +
             bytes([C64_TOKEN_PEEK]) + b(f"({NAV_ADDR})") +
@@ -485,36 +698,84 @@ def build_multipage_prg(pages: list[tuple[str, list[tuple[str, str]]]]) -> bytes
             bytes([C64_TOKEN_THEN]) +
             b("NP") + bytes([0xB2]) + bytes([C64_TOKEN_PEEK]) + b(f"({NAV_ADDR})") +
             bytes([0x3A]) + b("P") + bytes([0xB2]) + b("NP") +
+            bytes([0x3A]) + bytes([C64_TOKEN_POKE]) + b(f"{BITMASK_ADDR},0") +
             bytes([0x3A]) + bytes([C64_TOKEN_GOTO]) + b("40")
         ),
-        # IF TI-T0>180 THEN T0=TI:ON P+1 GOSUB val_targets
+        # IF TI<T0 THEN T0=TI  (handle 24h clock wrap — TI wraps every 24h)
         BasicLine(80,
-            bytes([C64_TOKEN_IF]) +
-            b("TI") + bytes([0xAB]) + b("T0") + bytes([0xB1]) + b("180") +
-            bytes([C64_TOKEN_THEN]) +
-            b("T0") + bytes([0xB2]) + b("TI") + bytes([0x3A]) +
-            bytes([0x91]) + b("P") + bytes([0xAA]) + b("1") +
-            bytes([C64_TOKEN_GOSUB]) + b(val_targets)
-        ),
-        # IF TI<T0 THEN T0=TI  (handle 24h clock wrap)
-        BasicLine(85,
             bytes([C64_TOKEN_IF]) +
             b("TI") + bytes([0xB3]) + b("T0") +
             bytes([C64_TOKEN_THEN]) + b("T0") + bytes([0xB2]) + b("TI")
         ),
-        _goto(90, 50),
+        # Lines 83-84: init cursor once when bitmap becomes non-zero
+        # 83: IF bitmap=0 THEN skip (no controllable entities)
+        # 83+1: IF CX=0 (not yet drawn) THEN draw cursor at first controllable slot
+        BasicLine(83,
+            bytes([C64_TOKEN_IF]) +
+            bytes([C64_TOKEN_PEEK]) + b(f"({BITMASK_ADDR})") +
+            bytes([0xB2]) + b("0") +
+            bytes([C64_TOKEN_THEN]) + bytes([C64_TOKEN_GOTO]) + b("85")
+        ),
+        BasicLine(84,
+            bytes([C64_TOKEN_IF]) + b("CX") + bytes([0xB2]) + b("0") +
+            bytes([C64_TOKEN_THEN]) +
+            b("CX") + bytes([0xB2]) + b("1") + bytes([0x3A]) +
+            bytes([C64_TOKEN_GOSUB]) + b("21300")
+        ),
+        # Skip cursor key handling if no controllable slots
+        # Down cursor
+        BasicLine(85,
+            bytes([C64_TOKEN_IF]) +
+            b("K$") + bytes([0xB2, 0xC7]) + b("(17)") +
+            bytes([C64_TOKEN_THEN]) +
+            b("TA") + bytes([0xB2]) + b("TI") + bytes([0x3A]) +
+            bytes([C64_TOKEN_POKE]) + b(f"{ACTIVITY_ADDR},(") +
+            bytes([C64_TOKEN_PEEK]) + b(f"({ACTIVITY_ADDR})") +
+            bytes([0xAA]) + b("1)") + bytes([0xAF]) + b("1") + bytes([0x3A]) +
+            bytes([C64_TOKEN_GOSUB]) + b("21000")
+        ),
+        # Up cursor
+        BasicLine(86,
+            bytes([C64_TOKEN_IF]) +
+            b("K$") + bytes([0xB2, 0xC7]) + b("(145)") +
+            bytes([C64_TOKEN_THEN]) +
+            b("TA") + bytes([0xB2]) + b("TI") + bytes([0x3A]) +
+            bytes([C64_TOKEN_POKE]) + b(f"{ACTIVITY_ADDR},(") +
+            bytes([C64_TOKEN_PEEK]) + b(f"({ACTIVITY_ADDR})") +
+            bytes([0xAA]) + b("1)") + bytes([0xAF]) + b("1") + bytes([0x3A]) +
+            bytes([C64_TOKEN_GOSUB]) + b("21100")
+        ),
+        # Return (CHR$(13)) → toggle selected entity
+        BasicLine(87,
+            bytes([C64_TOKEN_IF]) +
+            b("K$") + bytes([0xB2, 0xC7]) + b("(13)") +
+            bytes([C64_TOKEN_THEN]) +
+            b("TA") + bytes([0xB2]) + b("TI") + bytes([0x3A]) +
+            bytes([C64_TOKEN_POKE]) + b(f"{ACTIVITY_ADDR},(") +
+            bytes([C64_TOKEN_PEEK]) + b(f"({ACTIVITY_ADDR})") +
+            bytes([0xAA]) + b("1)") + bytes([0xAF]) + b("1") + bytes([0x3A]) +
+            bytes([C64_TOKEN_GOSUB]) + b("21200")
+        ),
+        _goto(88, 50),
     ]
 
-    # ── Page draw subroutines (1000, 2000, 3000) ─────────────────────────
+    # ── Page draw subroutines (1000, 2000, ...) ──────────────────────────
     page_lines: list[BasicLine] = []
+
     for i, (heading, sensors) in enumerate(pages):
         page_lines.extend(_page_subroutine(i, heading, sensors))
 
-    # ── Value-only refresh subroutines (5000, 6000, 7000) ────────────────
-    for i, (_, sensors) in enumerate(pages):
-        page_lines.extend(_value_subroutine(i, sensors))
+    # ── Cursor subroutines (9000+) — must come after page subs numerically
+    # but wait: 9000 > 1000..10000 so cursor subs must come after page subs
+    # but BEFORE value subs at 11000+
+    # Final order: ctrl(10-90) + pages(1000-10000) + cursor(9000-9220) + values(11000+)
+    # Problem: 9000 is between 1000 and 11000 so insert cursor between pages and values
+    page_lines.extend(_cursor_subroutines())
 
-    return _assemble(ctrl + page_lines)
+    # Line 1: GOSUB splash subroutine (splash draws screen then RETURNs)
+    splash_call = [BasicLine(1, bytes([C64_TOKEN_GOSUB]) + _petscii("30000"))]
+    splash_sub  = _build_splash()
+    return _assemble(splash_call + ctrl + page_lines + splash_sub)
 
 
 def build_sensor_prg(heading: str, sensors: list[tuple[str, str]]) -> bytes:
@@ -544,3 +805,11 @@ def build_hello_world_prg(heading: str) -> bytes:
         _goto(150, 150),   # spin
     ]
     return _assemble(lines)
+
+
+# ---------------------------------------------------------------------------
+# Control RAM addresses
+# ---------------------------------------------------------------------------
+ACTION_ADDR  = 53244   # $CFCC — C64 writes slot+1 here when Return pressed (0=idle)
+BITMAP_ADDR  = 53245   # $CFCD — HA writes controllable bitmap per page (bit N = slot N)
+OPTIM_ADDR   = 53246   # $CFCE — HA writes optimistic screen-code bytes here for C64 to POKE

@@ -3,97 +3,141 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blue)](https://www.home-assistant.io/)
+[![Version](https://img.shields.io/badge/version-1.2.0-green)](https://github.com/JKnivesworthy/hometo64/releases)
 
-Display your Home Assistant sensor data on a [**Commodore 64 Ultimate**](https://ultimate64.com/) using the REST API to load and control the program via HA.
+**Turn your Commodore 64 into a fully functional Home Assistant control interface.**
+
+Not just a dashboard — HomeTo64 lets you control lights, switches, locks, fans, covers and more directly from the C64 keyboard, while displaying live sensor data from your smart home in real time.
 
 ![HomeTo64 Logo](custom_components/hometo64/brand/logo.png)
 
 ---
 
-## Features
-- 📺 Live sensor dashboard on your C64U
-- 🔄 Automatic sensor value updates via direct RAM writes
-- 📑 Up to **10 pages** of sensors, navigated with cursor keys or from HA
-- ⌨️ Left/right cursor key navigation on the C64
-- 🖱️ **Next Page** button in HA UI — navigate remotely or create your own timed automation!
-- 🛑 **Stop RAM Writes** button — stop HA sending data when C64 is off or you change tasks
-- ⏱️ Configurable RAM Write auto-stop timeout 
-- 🔒 Optional network password support (Blank/None to match defaults)
+## What is HomeTo64?
+
+HomeTo64 is a Home Assistant custom integration that brings your smart home to a **Commodore 64** (or C128) via the **Ultimate 64** FPGA board or **1541 Ultimate II+** cartridge REST API.
+
+Using DMA writes directly into C64 screen RAM, sensor values update live with no screen flicker, no reset, and no typing required. But the real breakthrough in v1.2 is **bidirectional control** — the C64 keyboard becomes a remote control for Home Assistant. Navigate your sensor pages with cursor keys, select any controllable entity, and press Return to toggle it. The response is near-instant.
+
+This is believed to be the first Home Assistant integration to provide full bidirectional control with a Commodore 64.
 
 ---
-## Requirements
 
-- Home Assistant 2024.1 or later
-- C64 Ultimate connected to the same local network as Home Assistant **wired or WiFi** network
+## Compatible Hardware
+
+**Primary platform:**
+- **Ultimate 64** — a full FPGA reimplementation of the Commodore 64. The 6510 CPU, SID, VIC-II and RAM are all implemented in FPGA silicon, with the Ultimate REST API built in. The Ultimate 64 for the inspiration and test platform for HomeTo64.
+
+**Also supported (In theory):**
+- **Original C64 / C64C / C128** with a **1541 Ultimate II+** cartridge in the expansion port. The cartridge adds its own ARM processor and network connectivity, exposing the same REST API.
+
+Both platforms use identical API endpoints — HomeTo64 works the same on either. Probably.
+
+---
+
+## Features
+
+### Control
+-  Toggle entities from the C64 keyboard — lights, switches, locks, fans, covers, scenes, automations, groups
+-  Near-instant response — optimistic display update in under 200ms
+-  ● cursor indicator on controllable sensors — navigate with up/down cursor keys, press Return to toggle the HA entity.
+-  Remote control from HA — Launch, make sensor changes, change headings, and navigate pages via 'Next Page' button in the HA intergation
+
+### Display
+- 📺 **Live sensor dashboard** — values update without resetting or flickering the C64 screen
+- 📑 **Up to 10 pages** of sensors, each with a custom heading and up to 10 sensors
+- 🎬 **Splash screen** on launch featuring really bad HA logo ASCII art. I made it myself, and you can really tell!
+- 🎨 **Alternating white / light-blue** sensor rows for easy reading
+- 🔄 **State translation** — binary sensors show Open/Closed, Motion/Clear, Locked/Unlocked etc. Read from HA device class!
+
+### Navigation
+- ⌨️ **Left/right cursor keys** cycle pages on the C64
+- 🔁 **Auto-cycle pages** — automatically advance pages after configurable inactivity period
+
+### Management
+- 🛑 **Stop RAM Writes** button — To instantly stop HA sending data when you want to change C64 programs or the C64 is off.
+- ⏱️ **Auto-stop timeout** — stops RAM writes after configurable idle period because you will probably forget to turn it off.
+- 🔒 Optional network password support - Because there's 1 person that changed the default for some reason.
+
 ---
 
 ## Installation
 
 ### Prerequisites
 
-1. **Enable FTP services on C64U
-   - On the C64, open the Ultimate menu and navigate to **Network Settings**
-   - Enable the network interface (wired or WiFi)
-   - Note the IP address shown — you will need it during setup
-   - Enable FTP
+1. **Enable network access on your Ultimate 64 or 1541 Ultimate II+**
+   - Open the Ultimate menu → **Network Settings**
+   - Enable wired or WiFi network
+   - Note the IP address shown — you'll need it during setup
 
-2. **Install HomeTo64 in Home Assistant**
-
-   **Via HACS (recommended)**
+2. **Install HomeTo64 via HACS (recommended)**
    - In HACS → Integrations → ⋮ → Custom repositories
    - Add `https://github.com/JKnivesworthy/hometo64` as an **Integration**
    - Install **HomeTo64** and restart Home Assistant
 
-   **Manual**
-   - Copy the `custom_components/hometo64` folder into your HA `custom_components` directory
-   - Restart Home Assistant
+   **Or install manually** by copying `custom_components/hometo64` into your HA `custom_components` directory and restarting.
 
 ---
 
 ## Setup
 
-1. Go to **Settings → Devices & Services → Add Integration** and search for **HomeTo64**
-2. Enter your Ultimate **IP address** and optional network password
-3. Choose how many **pages** of sensors you want (1–10)
-4. For each page, set a **heading** and select up to 10 sensors from your HA entities
-5. Optionally customise each sensor's display name
-6. Press **Run on C64** in the HomeTo64 device panel — your dashboard will appear immediately
-
-That's it. Sensor values update automatically in the background at your configured interval. 
-Navigate via HA integration or press Left/Right CRSR Key on the C64.
+1. Go to **Settings → Devices & Services → Add Integration** → search **HomeTo64**
+2. Enter your Ultimate IP address and optional network password
+3. Configure display settings:
+   - **Refresh Interval** — how often to update values (minimum 1 second)
+   - **Auto-Stop RAM Writes** — stop after N minutes idle (0 = never)
+   - **Screen Saver / Auto-Cycle Pages** — auto-advance pages after N seconds of keyboard inactivity (0 = off, Recommended = 30, max 255s)
+   - **Number of Pages** — 1 to 10 pages
+4. For each page: set a heading, pick up to 10 sensors, optionally rename them
+5. Press **Run on C64** — the super professional splash screen appears, then your dashboard loads
 
 ---
 
-## How Data Works
-
-> **Important:** Once you press **Run on C64**, Home Assistant will continuously write live sensor data directly into the C64's RAM via the Ultimate cartridge's DMA interface. This continues until one of the following stops it:
->
-> - You press the **Stop RAM Writes** button in the device panel
-> - Your configured **Auto-Stop timeout** is reached (default: 2 hours)
-> - Home Assistant is restarted
->
-> The C64 does not need to be on for HA to attempt writes — press **Stop RAM Writes** whenever you are done with the dashboard to avoid unnecessary network traffic to your Commodore.
-
-
-## Usage
-
-### Launching the dashboard
-
-1. Press **Run on C64** in the HomeTo64 device panel
-2. The C64 resets and the dashboard appears immediately
-3. Sensor values update automatically at your configured interval
+## Using the Dashboard
 
 ### Navigating pages
+| Input | Action |
+|-------|--------|
+| Right cursor key | Next page |
+| Left cursor key | Previous page |
+| Next Page button (HA) | Advance page remotely |
+| Auto-cycle | Automatically advances after inactivity |
 
-- **Right cursor key** — next page
-- **Left cursor key** — previous page
-- **Next Page** button in HA — advance page remotely (also automatable)
+### Controlling entities
+
+Pages containing controllable entities display a **●** indicator at column 19 of each controllable row.
+
+| Input | Action |
+|-------|--------|
+| Down cursor key | Move ● to next controllable entity |
+| Up cursor key | Move ● to previous controllable entity |
+| Return / Enter | Toggle selected entity |
+
+The value on screen updates optimistically within 100ms. If the toggle fails, the correct state returns on the next refresh cycle.
+
+> **Note:** Up to **8 sensors per page** can be cursor-selected and toggled (byte-width bitmap limit). Sensors 9–10 display values but cannot be toggled. Split entities across pages if you need more than 8 toggleable per page.
 
 ### Stopping updates
+Press **Stop RAM Writes** when you are done. HA stops sending data immediately. Press **Run on C64** again to resume.
 
-Press **Stop RAM Writes** when done. This prevents HA from writing to the C64's RAM while the C64 is off or in use for something else. Press **Run on C64** again to resume.
+> HomeTo64 assumes the C64 is normally off and HA is always running. HA never writes to the C64 unsolicited — updates only begin after you press **Run on C64**.
 
-> **Note:** HomeTo64 assumes the C64 is normally off and HA is always running. Updates only start after you press **Run on C64** — HA never writes to the C64 unsolicited.
+---
+
+## Screen Layout
+
+```
+row  0: blank
+row  1:  -- HOME ASSISTANT DASHBOARD --   (heading, reverse video)
+row  2: blank
+row  3:  LIVING ROOM TEMP   ●   21.5 C   (bone white — ● = controllable, cursor here)
+row  4: blank
+row  5:  HUMIDITY               54 %     (light blue)
+row  6: blank
+row  7:  CEILING LIGHT      ●   On       (bone white — controllable)
+...
+row 24:  HOME ASSISTANT TO C64           (footer, always row 24)
+```
 
 ---
 
@@ -101,26 +145,53 @@ Press **Stop RAM Writes** when done. This prevents HA from writing to the C64's 
 
 ### How it works
 
-1. **Run on C64** pushes a tokenised C64 BASIC PRG via the Ultimate's `run_prg` REST endpoint
-2. The BASIC program draws the dashboard and enters a keyboard-polling spin loop
-3. HA writes updated sensor values to scratch RAM at `$C000` via the `writemem` DMA endpoint
-4. The BASIC program copies values from scratch RAM to screen RAM every ~3 seconds
-5. Page navigation uses `$CFFF` (53247) as a shared page-index byte
+1. **Run on C64** pushes a tokenised C64 BASIC PRG via `POST /v1/runners:run_prg`
+2. The PRG draws the dashboard and enters a non-blocking keyboard poll loop (`GET K$`)
+3. HA writes sensor values directly to screen RAM via `PUT /v1/machine:writemem` (DMA)
+4. When Return is pressed, BASIC POKEs slot+1 to `$CFCC`; HA reads it via `GET /v1/machine:readmem`, calls the HA service, and writes the optimistic display value back — all within ~100ms
+5. Page navigation uses `$CFFF` as a shared index byte; `$CFCD` carries the controllable bitmap; `$CFCB` carries the auto-cycle interval
 
-### Ultimate API endpoints used
+### RAM memory map
+
+| Address | Purpose |
+|---------|---------|
+| `$CFCB` | Auto-cycle interval in jiffies (HA writes) |
+| `$CFCC` | Action byte — C64 writes slot+1 on Return, HA reads and clears |
+| `$CFCD` | Controllable bitmap — HA writes per-page bitmask |
+| `$CFFF` | Navigation byte — HA writes page index for remote nav |
+
+### API endpoints used
 
 | Endpoint | Purpose |
 |----------|---------|
 | `GET /v1/info` | Connection test |
 | `POST /v1/runners:run_prg` | Push and run the BASIC PRG |
-| `PUT /v1/machine:writemem` | Update sensor values / navigate pages |
+| `PUT /v1/machine:writemem` | Write sensor values, bitmap, nav byte |
+| `GET /v1/machine:readmem` | Poll for toggle requests from C64 keyboard |
+
+### Controllable entity domains
+`light` · `switch` · `input_boolean` · `fan` · `cover` · `lock` · `scene` · `automation` · `group`
 
 ---
 
-## Planned Features
+## Changelog
 
-- 🎵 SID music playback during dashboard display?
-- 🖥️ Splash screen on launch
+### 1.2.0 — The Control Release
+- **Bidirectional control** — toggle HA entities directly from the C64 keyboard
+- **Near-instant toggle response** — action poll at 100ms, optimistic display update
+- **● cursor indicator** on controllable sensor rows
+- **Splash screen** with HA logo ASCII art on launch
+- **Auto-cycle pages** — configurable automatic page advancement on inactivity
+- **Up to 10 pages** (was 3 in 1.0)
+- **Next Page** and **Stop RAM Writes** buttons in HA device panel
+- **Multi-page config UI** — configure each page independently
+- **State translation** — binary sensors show human-readable states (Locked, Open, Motion)
+- **Group entity support** for light groups and switch groups
+- **Auto-stop timeout** for RAM writes
+
+### 1.0.0 — Initial Release (Dashboard)
+- Live sensor dashboard on Commodore 64 via Ultimate 64 / 1541 Ultimate II+
+- Sensor values update via DMA without resetting the C64
 
 ---
 
@@ -128,14 +199,27 @@ Press **Stop RAM Writes** when done. This prevents HA from writing to the C64's 
 
 | Problem | Solution |
 |---------|----------|
-| Cannot connect during setup | Check IP address and network connectivity 
-| Values not updating | Press **Run on C64** first; check HA logs for writemem errors 
-| WiFi connection issues | Update Ultimate firmware to latest firmware and set refresh interval to 5s+ 
-| Screen or Data scrambled | Press **Run on C64** to reinitialise 
+| Cannot connect | Check IP address and network connectivity |
+| Values not updating | Press **Run on C64** first; check HA logs for writemem errors |
+| WiFi issues | Update Ultimate firmware to 3.11+; try refresh interval 5s+ |
+| Screen scrambled | Press **Run on C64** to reinitialise |
+| ● cursor not appearing | Page has no controllable entities, or bitmap not yet written — wait one refresh interval |
+| Toggle not responding | Check HA logs; confirm entity domain is supported |
+| Sensor shows On/Off instead of Open/Closed | Confirm `device_class` is set on the entity in HA |
+
+---
+
+## Planned Features
+- 🎵 SID music playback during dashboard display? Seems crazy, but this is intetration is nuts already.
 
 ---
 
 ## License
 
-GNU General Public License v3.0 — see [LICENSE](LICENSE) for details.
-This software is free and open source. Any modifications must also be distributed under GPLv3.
+GNU General Public License v3.0 — see [LICENSE](LICENSE)
+
+## Contributing
+
+Pull requests welcome. Open an issue first for significant changes.
+
+[github.com/JKnivesworthy/hometo64](https://github.com/JKnivesworthy/hometo64)

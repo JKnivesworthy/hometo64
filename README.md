@@ -210,7 +210,7 @@ row 24:  HOME ASSISTANT TO C64           (footer, always row 24)
 ---
 
 ## Planned Features
-- 🎵 SID music playback during dashboard display? Seems crazy, but this intetration is nuts already.
+- 🎵 SID music playback during dashboard display? Seems crazy, but this integration is nuts already.
 
 ---
 

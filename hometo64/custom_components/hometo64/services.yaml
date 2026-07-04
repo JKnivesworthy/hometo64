@@ -1,0 +1,12 @@
+# services.yaml — declares services for HomeTo64
+#
+# The "download_prg" service is surfaced as a button on the integration
+# detail page in the HA UI.  When clicked, the frontend navigates to the
+# /api/hometo64/<entry_id>/download endpoint which serves the PRG binary.
+
+download_prg:
+  name: Download PRG
+  description: >
+    Download the current generated C64 BASIC PRG file to your computer.
+    The file is built from your current heading and filename settings.
+  fields: {}
